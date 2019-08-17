@@ -1,0 +1,8 @@
+input-dir: 'Input-sample'
+input-file1: 'file1.txt'
+input-file2: 'file2.txt'
+docker-image: 'ubuntu:14.04'
+create_image: 'True'
+local-caching: 'false'
+public-cache: 'false'
+
