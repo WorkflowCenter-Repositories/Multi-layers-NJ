@@ -1,0 +1,406 @@
+#Random WF extracted from NJ
+
+tosca_definitions_version: cloudify_dsl_1_0
+
+imports:
+  - http://www.getcloudify.org/spec/cloudify/3.1/types.yaml
+  - https://github.com/WorkflowCenter-Repositories/Node-Relationship-Types/raw/master/esc_nodetypes.yaml
+
+inputs:
+
+  input-dir:
+      description: >
+        The dir path of the input files  
+      default: 'Input-sample'
+
+  input-file1:
+      description: >
+        input file for importFile1
+      default: file1.txt
+
+  input-file2:
+      description: >
+        input file for importFile2
+      default: file2.txt
+
+  docker-image: 
+      description: > 
+        Docker image to be used for container building
+      default: 'ubuntu:14.04'
+
+  create_image:
+      description: > 
+        an option to create Docker images
+      default: 'True'
+
+  local-caching:
+      description: > 
+        an option to locally cache Docker images
+      default: 'False'
+
+  public-cache:
+      description: > 
+        an option to publically cache Docker images
+      default: 'False'
+
+node_types:
+
+  docker_container:
+    derived_from: cloudify.nodes.Root
+    properties:
+      image_name:
+        type: string
+        default: { get_input: docker-image } 
+      container_ID:
+        type: string
+        default: container1
+
+node_templates:
+
+  host:
+    type: cloudify.nodes.Compute
+    properties:
+      ip: localhost
+      install_agent: false
+
+  starterBlock:
+    type: cloudify.nodes.ApplicationModule
+    interfaces:
+      cloudify.interfaces.lifecycle:
+        create:
+          implementation: LifeCycleScripts/start-inhost.sh
+          inputs:
+            process:
+              args: [WF-2]
+    relationships:
+      - type: cloudify.relationships.contained_in
+        target: host
+
+  container1:
+    type: docker_container
+    properties:
+      #image_name: dtdwd/importfile1
+      container_ID: container1
+    interfaces:
+      cloudify.interfaces.lifecycle:
+        create:
+          implementation: LifeCycleScripts/container.sh
+          inputs:
+            process:
+              args: [WF-2, get_property: [importFile1, block_Url], java8]
+    relationships:
+      - type: cloudify.relationships.contained_in
+        target: host
+      - type: cloudify.relationships.depends_on
+        target: starterBlock
+
+  Java:
+    type: spec_library
+    properties:
+      lib_name: default-jdk
+    interfaces:
+      cloudify.interfaces.lifecycle:
+        create:
+          implementation: LifeCycleScripts/java-install2.sh
+          inputs:
+            process:
+              args: [container1, WF-2, '8']
+    relationships:
+      - type: cloudify.relationships.contained_in
+        target: container1
+
+  importFile1:
+    type: importfile
+    properties:
+      block_description: import file
+      block_name: importfile1.jar
+      block_category: File Management
+      service_type: block
+      block_Url: 'https://github.com/WorkflowCenter-Repositories/ImportFile-Task/raw/v1.0/importfile1.jar'
+      Source: file1.txt
+    interfaces:
+      cloudify.interfaces.lifecycle:
+        create:
+          implementation: LifeCycleScripts/task-download-single.sh
+          inputs:
+            process:
+             args: [{ get_input: create_image }, container1, get_property: [importFile1, block_Url]]
+        configure:
+          implementation: scripts/get-input.sh
+          inputs:
+            process:
+             args: [WF-2, container1, { get_input: input-dir }, { get_input: input-file1 }]
+        start: 
+          implementation: LifeCycleScripts/task-deploy.sh
+          inputs:
+            process:
+             args: [WF-2, container1, { get_input: input-file1 }]
+    relationships:
+      - type: cloudify.relationships.contained_in
+        target: container1
+      - type: cloudify.relationships.depends_on
+        target: Java
+
+  importFile2:
+    type: importfile
+    properties:
+      block_description: import file
+      block_name: importfile1.jar
+      block_category: File Management
+      service_type: block
+      block_Url: 'https://github.com/WorkflowCenter-Repositories/ImportFile-Task/raw/v1.0/importfile1.jar'
+      Source: file2.txt
+    interfaces:
+      cloudify.interfaces.lifecycle:
+        create:
+          implementation: LifeCycleScripts/task-download-single.sh
+          inputs:
+            process:
+             args: [{ get_input: create_image }, container1, get_property: [importFile2, block_Url]]
+        configure:
+          implementation: scripts/get-input.sh
+          inputs:
+            process:
+             args: [WF-2, container1, { get_input: input-dir }, { get_input: input-file2 }]
+        start: 
+          implementation: LifeCycleScripts/task-deploy.sh
+          inputs:
+            process:
+             args: [WF-2, container1, { get_input: input-file2 }]
+    relationships:
+      - type: cloudify.relationships.contained_in
+        target: container1
+      - type: cloudify.relationships.depends_on
+        target: Java
+
+  FileJoin:
+    type: fileJoin
+    properties:
+      block_description: concatenate 2 files
+      block_name: filejoin1.jar
+      block_category: File Management
+      service_type: block
+      block_Url: 'https://github.com/WorkflowCenter-Repositories/File-Join-Task/raw/v1.0/filejoin1.jar'
+      file-1: importFile1/output-1
+      file-2: importFile2/output-1
+    relationships:
+      - type: cloudify.relationships.contained_in
+        target: container1
+      - type: block_link
+        target: importFile1
+        source_interfaces:
+          cloudify.interfaces.relationship_lifecycle:
+            preconfigure:
+              implementation: LifeCycleScripts/datacopy.sh
+              inputs:
+                process:
+                  args: [importFile1/output-1, FileJoin/file-1, WF-2, container1]
+      - type: block_link
+        target: importFile2
+        source_interfaces:
+          cloudify.interfaces.relationship_lifecycle:
+            preconfigure:
+              implementation: LifeCycleScripts/datacopy.sh
+              inputs:
+                process:
+                  args: [importFile2/output-1, FileJoin/file-2, WF-2, container1]
+    interfaces:
+      cloudify.interfaces.lifecycle:
+        create:
+          implementation: LifeCycleScripts/task-download-single.sh
+          inputs:
+            process:
+             args: [{ get_input: create_image }, container1, get_property: [FileJoin, block_Url]]
+        start:
+          implementation: LifeCycleScripts/task-deploy.sh
+          inputs:
+            process:
+              args: [WF-2, container1]
+
+  FilterDupl:
+    type: filterDupl
+    properties:
+      block_description: I don't know
+      block_name: filterduplicates1.jar
+      block_category: File Management
+      service_type: block
+      block_Url: 'https://github.com/WorkflowCenter-Repositories/Filter-Duplicate-Task/raw/v1.0/filterduplicates1.jar'
+    relationships:
+      - type: cloudify.relationships.contained_in
+        target: container1
+      - type: block_link
+        target: FileJoin
+        source_interfaces:
+          cloudify.interfaces.relationship_lifecycle:
+            preconfigure:
+              implementation: LifeCycleScripts/datacopy.sh
+              inputs:
+                process:
+                  args: [FileJoin/file-3, FilterDupl/fasta-files, WF-2, container1]
+    interfaces:
+      cloudify.interfaces.lifecycle:
+        create:
+          implementation: LifeCycleScripts/task-download-single.sh
+          inputs:
+            process:
+             args: [{ get_input: create_image }, container1, get_property: [FilterDupl, block_Url]]
+        start:
+          implementation: LifeCycleScripts/task-deploy.sh
+          inputs:
+            process:
+              args: [WF-2, container1]
+
+  ZipFile:
+    type: zipFile
+    properties:
+      block_description: invert the column of csv file
+      block_name: filezip1.jar
+      block_category: File Management
+      service_type: block
+      block_Url: https://github.com/WorkflowCenter-Repositories/ZipFile-Task/raw/v2/filezip1.jar
+    interfaces:
+      cloudify.interfaces.lifecycle:
+        create: 
+          implementation: LifeCycleScripts/task-download-single.sh
+          inputs:
+            process:
+             args: [{ get_input: create_image }, container1, get_property: [ZipFile, block_Url]]
+        start: 
+          implementation: LifeCycleScripts/task-deploy.sh
+          inputs:
+            process:
+             args: [WF-2, container1, "rawa"]
+    relationships:
+      - type: cloudify.relationships.contained_in
+        target: container1
+      - type: block_link
+        target: FilterDupl
+        source_interfaces:
+          cloudify.interfaces.relationship_lifecycle:
+            preconfigure:
+              implementation: LifeCycleScripts/datacopy.sh
+              inputs:
+                process:
+                  args: [FilterDupl/filtered-fasta-files, ZipFile/input-1, WF-2, container1]
+
+  ExportFiles1:
+    type: exportfiles
+    properties:
+      block_description: export files
+      block_name: exportfiles1.jar
+      block_category: File Management
+      service_type: block
+      block_Url: 'https://github.com/WorkflowCenter-Repositories/ExportFiles-Task/raw/v1.0/exportfiles1.jar'
+    relationships:
+      - type: cloudify.relationships.contained_in
+        target: container1
+      - type: block_link
+        target: ZipFile
+        source_interfaces:
+          cloudify.interfaces.relationship_lifecycle:
+            preconfigure:
+              implementation: LifeCycleScripts/datacopy.sh
+              inputs:
+                process:
+                  args: [ZipFile/output-1, ExportFiles1/file-list, WF-2, container1]
+    interfaces:
+      cloudify.interfaces.lifecycle:
+        create:
+          implementation: LifeCycleScripts/task-download-single.sh
+          inputs:
+            process:
+             args: [{ get_input: create_image }, container1, get_property: [ExportFiles1, block_Url]]
+        start: 
+          implementation: LifeCycleScripts/task-deploy.sh
+          inputs:
+            process:
+             args: [WF-2, container1]
+
+  Col_invert:
+    type: colinvert
+    properties:
+      block_description: invert the column of csv file
+      block_name: Col-invert.jar
+      block_category: File Management
+      service_type: block
+      block_Url: https://github.com/WorkflowCenter-Repositories/Column-Invert-Task/raw/release/Col-invert.jar
+    interfaces:
+      cloudify.interfaces.lifecycle:
+        create: 
+          implementation: LifeCycleScripts/task-download-single.sh
+          inputs:
+            process:
+             args: [{ get_input: create_image}, container1, get_property: [Col_invert, block_Url]]
+        start: 
+          implementation: LifeCycleScripts/task-deploy.sh
+          inputs:
+            process:
+             args: [WF-2, container1]
+    relationships:
+      - type: cloudify.relationships.contained_in
+        target: container1
+      - type: block_link
+        target: FilterDupl
+        source_interfaces:
+          cloudify.interfaces.relationship_lifecycle:
+            preconfigure:
+              implementation: LifeCycleScripts/datacopy.sh
+              inputs:
+                process:
+                  args: [FilterDupl/sequence-map, Col_invert/input-1, WF-2, container1]
+
+  CSV_export1:
+    type: csvexport
+    properties:
+      block_description: export csv file
+      block_name: csvexport1.jar
+      block_category: File Management
+      FileName: out1.csv
+      service_type: block
+      block_Url: 'https://github.com/WorkflowCenter-Repositories/CSV-Export-Task/raw/v1.0/csvexport1.jar'
+    relationships:
+      - type: cloudify.relationships.contained_in
+        target: container1
+      - type: block_link
+        target: Col_invert
+        source_interfaces:
+          cloudify.interfaces.relationship_lifecycle:
+            preconfigure:
+              implementation: LifeCycleScripts/datacopy.sh
+              inputs:
+                process:
+                  args: [Col_invert/output-1, CSV_export1/input-data, WF-2, container1]
+    interfaces:
+      cloudify.interfaces.lifecycle:
+        create:
+          implementation: LifeCycleScripts/task-download-single.sh
+          inputs:
+            process:
+             args: [{ get_input: create_image }, container1, get_property: [CSV_export1, block_Url]]
+        start: 
+          implementation: LifeCycleScripts/task-deploy.sh
+          inputs:
+            process:
+             args: [WF-2, container1]
+
+  finalBlock:
+    type: cloudify.nodes.ApplicationModule
+    interfaces:
+      cloudify.interfaces.lifecycle:
+        configure:
+          implementation: LifeCycleScripts/containers-clean.sh
+          inputs:
+            process:
+              args: [container1]
+        start:
+          implementation: LifeCycleScripts/final-inhost.sh
+          inputs:
+            process:
+              args: [WF-2]
+    relationships:
+      - type: cloudify.relationships.contained_in
+        target: host
+      - type: cloudify.relationships.depends_on
+        target: ExportFiles1
+      - type: cloudify.relationships.depends_on
+        target: CSV_export1
